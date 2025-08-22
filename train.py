@@ -7,8 +7,10 @@ args = None
 def parse_args():
     parser = argparse.ArgumentParser(description='Train ')
     parser.add_argument('--model-name', default='vgg19_trans', help='the name of the model')
-    parser.add_argument('--data-dir', default=r'E:\Dataset\Counting\UCF-Train-Val-Test',
-                        help='training data directory')
+    parser.add_argument('--ucf-data-dir', default=r'E:\Dataset\Counting\UCF-Train-Val-Test',
+                        help='UCF-QNRF dataset directory')
+    parser.add_argument('--jhu-data-dir', default=r'E:\Dataset\Counting\JHU_Train_Val_Test',
+                        help='JHU-CROWD++ dataset directory')
     parser.add_argument('--save-dir', default='model',
                         help='directory to save models.')
     parser.add_argument('--save-all', type=bool, default=False,
@@ -21,7 +23,7 @@ def parse_args():
                         help='the path of resume training model')
     parser.add_argument('--max-model-num', type=int, default=1,
                         help='max models num to save ')
-    parser.add_argument('--max-epoch', type=int, default=1200,
+    parser.add_argument('--max-epoch', type=int, default=1500,
                         help='max training epoch')
     parser.add_argument('--val-epoch', type=int, default=5,
                         help='the num of steps to log training information')

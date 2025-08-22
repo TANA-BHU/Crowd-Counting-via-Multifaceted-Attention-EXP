@@ -13,7 +13,29 @@ Official Implement of CVPR 2022 paper 'Boosting Crowd Counting via Multifaceted 
 5. Wait patiently for the program to finish.
 6. Then you will get a good counting model!
 
+## Dataset Structure Required:
+```
+UCF-Train-Val-Test/
+├── train/
+├── val/
+└── test/
 
+JHU_Train_Val_Test/
+├── train/
+├── val/
+└── test/
+```
+## Train commamd:
+``` 
+python train.py \
+    --ucf-data-dir /path/to/UCF-Train-Val-Test \
+    --jhu-data-dir /path/to/JHU_Train_Val_Test \
+    --max-epoch 1500 \
+    --lr 5e-6 \
+    --batch-size 8 \
+    --val-epoch 5 \
+    --val-start 200
+```
 ## Test
 1. Dowload Dataset JHU++ or UCF-QNRF.
 2. Preprocess them by 'preprocess_dataset.py' or 'preprocess_dataset_ucf.py'.
@@ -22,14 +44,3 @@ Official Implement of CVPR 2022 paper 'Boosting Crowd Counting via Multifaceted 
 5. Run 'Test.py'.
 
 
-## Citation
-If you use this code for your research, please cite our paper:
-
-```
-@inproceedings{lin2022boosting,
-  title={Boosting Crowd Counting via Multifaceted Attention},
-  author={Lin, Hui and Ma, Zhiheng and Ji, Rongrong and Wang, Yaowei and Hong, Xiaopeng},
-  booktitle={CVPR},
-  year={2022}
-}
-```

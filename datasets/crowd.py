@@ -115,3 +115,31 @@ class Crowd(data.Dataset):
                 img = F.hflip(img)
         return self.trans(img), torch.from_numpy(keypoints.copy()).float(), \
                torch.from_numpy(target.copy()).float(), st_size
+
+
+class CombinedCrowdDataset(data.Dataset):
+    def __init__(self, ucf_root_path, jhu_root_path, crop_size, 
+                 downsample_ratio, is_gray=False, method='train'):
+
+        self.ucf_dataset = Crowd(ucf_root_path, crop_size, downsample_ratio, is_gray, method)
+        self.jhu_dataset = Crowd(jhu_root_path, crop_size, downsample_ratio, is_gray, method)
+        
+        self.ucf_weight = 0.4
+        self.method = method
+        
+        self.ucf_len = len(self.ucf_dataset)
+        self.jhu_len = len(self.jhu_dataset)
+        self.total_len = max(self.ucf_len, self.jhu_len) * 2
+        
+    def __len__(self):
+        return self.total_len
+    
+    def __getitem__(self, idx):
+        if random.random() < self.ucf_weight:
+
+            ucf_idx = random.randint(0, self.ucf_len - 1)
+            return self.ucf_dataset[ucf_idx]
+        else:
+
+            jhu_idx = random.randint(0, self.jhu_len - 1)
+            return self.jhu_dataset[jhu_idx]

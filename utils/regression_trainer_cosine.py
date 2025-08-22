@@ -11,7 +11,7 @@ import logging
 import numpy as np
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from models import vgg_c
-from datasets.crowd import Crowd
+from datasets.crowd import Crowd, CombinedCrowdDataset
 from losses.bay_loss import Bay_Loss
 from losses.post_prob import Post_Prob
 from math import ceil
@@ -30,6 +30,8 @@ class RegTrainer(Trainer):
     def setup(self):
         """initial the datasets, model, loss and optimizer"""
         args = self.args
+        ucf_data_dir = args.ucf_data_dir 
+        jhu_data_dir = args.jhu_data_dir 
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
             self.device_count = torch.cuda.device_count()
@@ -40,19 +42,49 @@ class RegTrainer(Trainer):
             raise Exception("gpu is not available")
 
         self.downsample_ratio = args.downsample_ratio
-        self.datasets = {x: Crowd(os.path.join(args.data_dir, x),
-                                  args.crop_size,
-                                  args.downsample_ratio,
-                                  args.is_gray, x) for x in ['train', 'val']}
-        self.dataloaders = {x: DataLoader(self.datasets[x],
-                                          collate_fn=(train_collate
-                                                      if x == 'train' else default_collate),
-                                          batch_size=(args.batch_size
-                                          if x == 'train' else 1),
-                                          shuffle=(True if x == 'train' else False),
-                                          num_workers=args.num_workers*self.device_count,
-                                          pin_memory=(True if x == 'train' else False))
-                            for x in ['train', 'val']}
+        self.datasets = {}
+        for split in ['train', 'val']:
+            if split == 'train':
+                self.datasets[split] = CombinedCrowdDataset(
+            os.path.join(ucf_data_dir, split),
+            os.path.join(jhu_data_dir, split), 
+            args.crop_size,
+            args.downsample_ratio,
+            args.is_gray, 
+            split
+        )
+            else:
+                self.datasets['ucf_val'] = Crowd(os.path.join(ucf_data_dir, 'val'),
+                                       args.crop_size, args.downsample_ratio,
+                                       args.is_gray, 'val')
+                self.datasets['jhu_val'] = Crowd(os.path.join(jhu_data_dir, 'val'),
+                                       args.crop_size, args.downsample_ratio,
+                                       args.is_gray, 'val') 
+        self.dataloaders = {}
+        self.dataloaders['train'] = DataLoader(
+                    self.datasets['train'],
+                    collate_fn=train_collate,
+                    batch_size=args.batch_size,
+                    shuffle=True,
+                    num_workers=args.num_workers*self.device_count,
+                    pin_memory=True)
+        
+        self.dataloaders['ucf_val'] = DataLoader(
+                    self.datasets['ucf_val'],
+                    collate_fn=default_collate,
+                    batch_size=1,
+                    shuffle=False,
+                    num_workers=args.num_workers*self.device_count,
+                    pin_memory=False)
+        
+        self.dataloaders['jhu_val'] = DataLoader(
+                    self.datasets['jhu_val'],
+                    collate_fn=default_collate,
+                    batch_size=1,
+                    shuffle=False,
+                    num_workers=args.num_workers*self.device_count,
+                    pin_memory=False)
+        
         # self.model = getattr(models, args.model_name)()
         self.model = vgg_c.vgg19_trans()
         self.model.to(self.device)
@@ -146,17 +178,55 @@ class RegTrainer(Trainer):
 
     def val_epoch(self):
         epoch_start = time.time()
-        self.model.eval()  # Set model to evaluate mode
+        self.model.eval()
+        
+        # Validate on both datasets separately
+        ucf_results = self.validate_single_dataset('ucf_val')
+        jhu_results = self.validate_single_dataset('jhu_val')
+        
+        # Calculate combined metrics
+        combined_mse = 0.4 * ucf_results['mse'] + 0.6 * jhu_results['mse']
+        combined_mae = 0.4 * ucf_results['mae'] + 0.6 * jhu_results['mae']
+        
+        logging.info('Epoch {} Val - UCF: MSE {:.2f} MAE {:.2f}, JHU: MSE {:.2f} MAE {:.2f}, Combined: MSE {:.2f} MAE {:.2f}, Cost {:.1f} sec'
+                    .format(self.epoch, ucf_results['mse'], ucf_results['mae'],
+                            jhu_results['mse'], jhu_results['mae'],
+                            combined_mse, combined_mae, time.time()-epoch_start))
+
+        # Save best model based on combined metric
+        model_state_dic = self.model.state_dict()
+        logging.info("best combined mse {:.2f} mae {:.2f}".format(self.best_mse, self.best_mae))
+        
+        # Use combined metric for model selection
+        combined_score = 2.0 * combined_mse + combined_mae
+        best_score = 2.0 * self.best_mse + self.best_mae
+        
+        if combined_score < best_score:
+            self.best_mse = combined_mse
+            self.best_mae = combined_mae
+            logging.info("save best combined mse {:.2f} mae {:.2f} model epoch {}".format(
+                self.best_mse, self.best_mae, self.epoch))
+            
+            if self.save_all:
+                torch.save(model_state_dic, os.path.join(self.save_dir, 'best_model_{}.pth'.format(self.best_count)))
+                self.best_count += 1
+            else:
+                torch.save(model_state_dic, os.path.join(self.save_dir, 'best_model.pth'))
+
+    def validate_single_dataset(self, dataset_name):
+        """Validate on a single dataset"""
         epoch_res = []
-        # Iterate over data.
-        for inputs, count, name in self.dataloaders['val']:
+        dataloader = self.dataloaders[dataset_name]
+        
+        for inputs, count, name in dataloader:
             inputs = inputs.to(self.device)
-            # inputs are images with different sizes
             b, c, h, w = inputs.shape
             h, w = int(h), int(w)
             assert b == 1, 'the batch size should equal to 1 in validation mode'
+            
             input_list = []
             if h >= 3584 or w >= 3584:
+                # Same sliding window logic as before
                 h_stride = int(ceil(1.0 * h / 3584))
                 w_stride = int(ceil(1.0 * w / 3584))
                 h_step = h // h_stride
@@ -174,6 +244,7 @@ class RegTrainer(Trainer):
                         else:
                             w_end = w
                         input_list.append(inputs[:, :, h_start:h_end, w_start:w_end])
+                
                 with torch.set_grad_enabled(False):
                     pre_count = 0.0
                     for idx, input in enumerate(input_list):
@@ -184,29 +255,14 @@ class RegTrainer(Trainer):
             else:
                 with torch.set_grad_enabled(False):
                     outputs = self.model(inputs)[0]
-                    # save_results(inputs, outputs, self.vis_dir, '{}.jpg'.format(name[0]))
                     res = count[0].item() - torch.sum(outputs).item()
                     epoch_res.append(res)
 
         epoch_res = np.array(epoch_res)
         mse = np.sqrt(np.mean(np.square(epoch_res)))
         mae = np.mean(np.abs(epoch_res))
-        logging.info('Epoch {} Val, MSE: {:.2f} MAE: {:.2f}, Cost {:.1f} sec'
-                     .format(self.epoch, mse, mae, time.time()-epoch_start))
-
-        model_state_dic = self.model.state_dict()
-        logging.info("best mse {:.2f} mae {:.2f}".format(self.best_mse, self.best_mae))
-        if (2.0 * mse + mae) < (2.0 * self.best_mse + self.best_mae):
-            self.best_mse = mse
-            self.best_mae = mae
-            logging.info("save best mse {:.2f} mae {:.2f} model epoch {}".format(self.best_mse,
-                                                                                 self.best_mae,
-                                                                                 self.epoch))
-            if self.save_all:
-                torch.save(model_state_dic, os.path.join(self.save_dir, 'best_model_{}.pth'.format(self.best_count)))
-                self.best_count += 1
-            else:
-                torch.save(model_state_dic, os.path.join(self.save_dir, 'best_model.pth'))
+        
+        return {'mse': mse, 'mae': mae}
 
 
 
